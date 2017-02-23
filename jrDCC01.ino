@@ -10,7 +10,7 @@
 // -------------------------------------- DEFINE ------------------------------
 
 
-#define I2C_TIMEOUT 500
+#define I2C_TIMEOUT 500UL
 //#define ARDUINO_MEGA 1
 //#define SPI_8
 //#define SPI_16
@@ -99,7 +99,9 @@ byte analog_info=0;
 NmraDcc  Dcc ;
 ardState aState=initial;
 JRcmd jrcmd;
-//char msg_pending_bufor [CMD_BUF];
+char msg_received_bufor [CMD_BUF+1];
+char msg_toMaster_bufor [CMD_BUF+1];
+
 
 #ifdef SPI_1_16
  mcp23s17 spi1(10,0x21);
@@ -236,6 +238,12 @@ bool jr_cmd_state(ParserParam *p1){
   
 };
 
+bool jr_cmd_master_msg (ParserParam *p1){  // send message to i2c master
+  JR_PRINTLNF("jr_cmd_master_msg"); 
+  ParserParam p=*p1;
+  strcpy(msg_toMaster_bufor,p.raw+3);
+   JR_PRINTF("TO_MASTER:");JR_PRINTLN(msg_toMaster_bufor);
+};
 
 // -------------------------------------- Pin Initialize ------------------------------
 
@@ -245,7 +253,7 @@ void pin_initialize() {
   uint8_t  a1;
 
 
-  DEBUG_PRINT(F("start"));
+  JR_PRINTLNF("pin_initialize start");
   #ifdef SPI_1_8
     spi4.initialize();
   #endif
@@ -333,16 +341,11 @@ void pin_initialize() {
 
     
   }
-    //gpioRegisterReadWord
-    //gpioRegisterWriteWord
-
-
-
 
 
 // =================== analog pin initialization ==================
 
- DEBUG_PRINT(F("analog")); 
+ JR_PRINTLNF("pin_initialize analog"); 
   for (int i=0;i<arduino.a.analog;i++) {
       //analogPin
   }
@@ -361,7 +364,7 @@ void pin_initialize() {
      spi3.gpioPortUpdate();
   #endif
   
-  DEBUG_PRINT(F("end pin_init"));
+  JR_PRINTLNF("pin_initialize end pin_init");
   
 }
 
@@ -552,7 +555,8 @@ void setup() {
   Serial.begin(115200);           // start serial for output
   JR_PRINTLNF("Setup START");
 
-  //msg_pending_bufor[0]=0;
+  msg_received_bufor[0]=0;
+  msg_toMaster_bufor[0]=0;
   
   // pin initialization
   arduino.a.digital=short(sizeof (digitalPin)/ sizeof (DigitalPinU)),
@@ -584,11 +588,12 @@ void setup() {
 
 
   jrcmd.standard();
-  jrcmd.add("SPI" ,&jr_cmd_spi);
-  jrcmd.add("UPDATE" ,&jr_cmd_update);
-  jrcmd.add("STATE" ,&jr_cmd_state);
-  jrcmd.add("WR" ,&jr_cmd_wr);
-  jrcmd.add("RR" ,&jr_cmd_rr);
+  jrcmd.add(F("SPI")    ,&jr_cmd_spi);
+  jrcmd.add(F("UPDATE") ,&jr_cmd_update);
+  jrcmd.add(F("STATE")  ,&jr_cmd_state);
+  jrcmd.add(F("WR")     ,&jr_cmd_wr);
+  jrcmd.add(F("RR")     ,&jr_cmd_rr);
+  jrcmd.add(F("MA")     ,&jr_cmd_master_msg);
   
   JR_PRINTLNF("Setup END");
 
@@ -603,11 +608,18 @@ void loop() {
   
   // I2C timeout - to do
 
-//  jr_command(&Serial);
+
+  if (msg_received_bufor[0]) {
+    jrcmd.parse(msg_received_bufor,strlen(msg_received_bufor));
+    msg_received_bufor[0]=0;
+  }
+  
   jrcmd.proceed(&Serial);
-  delay(1000);
+  //delay(10);
   
   Dcc.process();
+
+  // prepare the state of the pins  
   getDPortFast_Update();
   for (i=0;i<arduino.a.digital;i++) {
     // Reed (kontaktron) & analog optical proximity sensors show LOW in case of USE 
@@ -629,7 +641,10 @@ void loop() {
   #endif
     
   }
-  
+
+  // add info if any message pending
+  if (msg_toMaster_bufor[0]) SetBit(Stan,arduino.a.digital+arduino.a.analog); 
+                      else ClearBit(Stan,arduino.a.digital+arduino.a.analog); 
 }
 
 
@@ -684,7 +699,7 @@ void requestEvent() {
         JR_PRINTDECV(F(" size"),sizeof(DigitalPinU));
         pin_send++;
       } else {
-      //analogPin
+      //if all Digital send --> propagate analogPin
       
         if (pin_send<arduino.a.digital+arduino.a.analog) {
           //send analog PIN
@@ -712,8 +727,18 @@ void requestEvent() {
 //            while(1);
         }
     break;
+
+  
+  case msg_to_master:  
+    JR_PRINTF(" msg_to_master ");
+    JR_PRINT(CMD_BUF);
+    Wire.write(msg_toMaster_bufor,CMD_BUF);
+    msg_toMaster_bufor[0]=0;msg_toMaster_bufor[CMD_BUF]=0;  //clear the bufer
+    
+    break;
     
   case get_Apin:
+    //not tested  !!!!
     JR_PRINTF(" get_Apin");
     JR_VDF(analog_info);
     JR_PRINTDECV(F(" threshold"),analogPin[analog_info].a.threshold);
@@ -721,13 +746,13 @@ void requestEvent() {
       Wire.write(int(analogRead(A0+analogPin[analog_info].a.port)));
       Wire.write(int(analogPin[analog_info].a.threshold));
     } 
-  // return 2bytes Analog value of the PIN
+  // return 2bytes Analog value of the PIN + 2 bytes of threshold
     break;
 
-  // set the Pin state -->0,1
-  //set:
   // set the threshold
-  //set_Atreshold:
+  case set_Atreshold:
+      //not tested  !!!!
+    break;
   default:
     break;
   JR_PRINTF(" DEFAULT");
@@ -817,17 +842,18 @@ void receiveEvent(int howMany) {
       }
       break;
 
-    case msg_pending:
+    case msg_to_slave:
       {
+        JR_PRINTF(" msg ");
         wait_bytes (1);
         short ile =Wire.read();
         
         wait_bytes (ile);
         for (int i=0;i<ile;i++) {
- //         if (i<CMD_BUF) msg_pending_bufor[i]=Wire.read();  //in case of ile longer then CMD_BUF
+          if (i<CMD_BUF) msg_received_bufor[i]=Wire.read();  //in case of ile longer then CMD_BUF
         }
- //       msg_pending_bufor[ile]=0;msg_pending_bufor[CMD_BUF-1]=0; // for security
-        
+        msg_received_bufor[ile]=0;msg_received_bufor[CMD_BUF]=0; // for security
+        JR_VF(ile);JR_PRINT(msg_received_bufor);
       }
       break;
     default:
