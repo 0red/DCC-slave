@@ -93,7 +93,7 @@ byte PIN[4][22]={
 
 // -------------------------------------- VARIABLES ------------------------------
 
-byte Stan[get_byte(ANALOG_MAX+DIGITAL_MAX)];
+byte Stan[get_byte( (1<<ANALOG_MAX) + (1<<DIGITAL_MAX) + 1)];
 byte pin_send=0;
 byte analog_info=0;
 NmraDcc  Dcc ;
@@ -141,11 +141,11 @@ DigitalPinU digitalPin[]={
   {"PinD3",0,5,0,0,301,sig2},
   {"PinD4",0,7,0,0,303,power},
   {"PinD5",0,8,1,1,0,no_dcc},
-  {"PinD6",0,9,0,0,304,sig2}
+  {"PinD6",0,13,0,0,304,sig2}
 };
 
 AnalogPinU analogPin[]={
-  {"PinA1",short(0),uint8_t(600)},
+//  {"PinA1",short(0),uint8_t(600)},
   {"PinA2",short(1),uint8_t(602)},
   {"PinA3",short(2),uint8_t(603)}
 };
@@ -154,10 +154,24 @@ AnalogPinU analogPin[]={
 
 // -------------------------------------- CMD function ------------------------------
 
+bool jr_cmd_stan(ParserParam *p1){
+  JR_PRINTLNF("jr_cmd_stan"); 
+  ParserParam p=*p1;
+  for (int i=0;i<arduino.a.bytes;i++) { JR_PRINTBINV(i,Stan[i]);}
+
+  int j=(1<<DIGITAL_MAX)+(1<<ANALOG_MAX)+1;
+  JR_PRINTDECV("A",(1<<ANALOG_MAX));
+  JR_PRINTDECV("A",(1<<DIGITAL_MAX));
+  JR_PRINTDECV("S",j);
+  JR_PRINTDECV("B",get_byte(j));  
+  JR_PRINTF("TO_MASTER:");JR_PRINTDEC(msg_toMaster_bufor[0]);JR_PRINTLN(msg_toMaster_bufor);
+  JR_LN;
+  
+}
 
 
 bool jr_cmd_spi(ParserParam *p1){
-  DEBUG_PRINT(""); 
+  JR_PRINTLNF("jr_cmd_spi"); 
   ParserParam p=*p1;
   setDPort(p.i[1],p.i[2],(p.i[3]==0)?LOW:HIGH);
   JR_PRINTV("spi",p.i[1]);
@@ -168,16 +182,15 @@ bool jr_cmd_spi(ParserParam *p1){
 };
 
 bool jr_cmd_update(ParserParam *p1){
-  DEBUG_PRINT(""); 
+  JR_PRINTLNF("jr_cmd_update  - getDPortFast_Update();"); 
   ParserParam p=*p1;
   getDPortFast_Update();
 }
 
 
 bool jr_cmd_state(ParserParam *p1){
+  JR_PRINTLNF("jr_cmd_state"); 
   ParserParam p=*p1;
-  DEBUG_PRINT(""); 
-   JR_LN; JR_PRINTF("A: ");
   
   getDPortFast_Update();
   
@@ -311,7 +324,8 @@ void pin_initialize() {
             #endif          
 
             if (digitalPin[i].a.pull_up) {
-              SetBit(JRpullup,digitalPin[i].a.port+((digitalPin[i].a.spi-1)*16));
+              int bit=(int)digitalPin[i].a.port+((digitalPin[i].a.spi-1)*16)
+              SetBit(JRpullup,bit);
             }
           }
       }
@@ -376,15 +390,13 @@ boolean setDPort(short spi,short port,short val) {
 
   #ifndef ARDUINO_MEGA 
     if (spi==0 && port<20) {
-      digitalWrite(int(digitalPin[port].a.port),val ); //0 - HIGH, t1 - LOW
-    }
   #endif
-  
-  #ifdef ARDUINO_MEGA 
+    #ifdef ARDUINO_MEGA 
     if (spi==0 && port<54) {
-      digitalWrite(int(digitalPin[port].a.port),val ); //0 - HIGH, 1 - LOW
-    } 
   #endif
+//      digitalWrite(int(digitalPin[port].a.port),val ); //0 - HIGH, 1 - LOW
+      digitalWrite(port,val ); //0 - HIGH, t1 - LOW
+    } 
   
   #ifdef SPI_1_16
     if (spi==1 && port>=0 && port<16) { spi1.gpioDigitalWrite(port,((val==LOW) ? false : true )); }
@@ -557,6 +569,10 @@ void setup() {
 
   msg_received_bufor[0]=0;
   msg_toMaster_bufor[0]=0;
+
+  
+  sprintf_P(msg_toMaster_bufor,PSTR("DEL %u"),arduino.a.i2c);
+  
   
   // pin initialization
   arduino.a.digital=short(sizeof (digitalPin)/ sizeof (DigitalPinU)),
@@ -594,6 +610,7 @@ void setup() {
   jrcmd.add(F("WR")     ,&jr_cmd_wr);
   jrcmd.add(F("RR")     ,&jr_cmd_rr);
   jrcmd.add(F("MA")     ,&jr_cmd_master_msg);
+  jrcmd.add(F("STAN")   ,&jr_cmd_stan);
   
   JR_PRINTLNF("Setup END");
 
@@ -629,22 +646,36 @@ void loop() {
     // todo --> check the Occupancy board result and reaction --> 
     //          1 on I2C means Train is on the track 
     //          0 - possibly no train (NOW)
-    if (getDPortFast(digitalPin[i].a.spi,digitalPin[i].a.port)==LOW) SetBit(Stan,i);
+    if (getDPortFast(digitalPin[i].a.spi,digitalPin[i].a.port)==LOW) {SetBit(Stan,i);}
   }
   for (i=0;i<arduino.a.analog;i++) {
   #ifndef ARDUINO_MEGA 
-    if (analogRead(analogPin[i].a.port+A0)<analogPin[i].a.threshold) SetBit(Stan,i+arduino.a.digital);
+    if (analogRead(analogPin[i].a.port+A0)<analogPin[i].a.threshold) {
+      int j=int(i+arduino.a.digital);
+      SetBit(Stan,j);
+    }
   #endif
   #ifdef ARDUINO_MEGA 
     // to be check the Mapping !!!!
-    if (analogRead(analogPin[i].a.port+A0)<analogPin[i].a.threshold) SetBit(Stan,i+arduino.a.digital);
+    if (analogRead(analogPin[i].a.port+A0)<analogPin[i].a.threshold) {
+      int j=int(i+arduino.a.digital);
+      SetBit(Stan,j);
+    }  
   #endif
     
   }
 
   // add info if any message pending
-  if (msg_toMaster_bufor[0]) SetBit(Stan,arduino.a.digital+arduino.a.analog); 
-                      else ClearBit(Stan,arduino.a.digital+arduino.a.analog); 
+  if (msg_toMaster_bufor[0]) {
+      int i=int(arduino.a.digital+arduino.a.analog);
+      SetBit(Stan,i); 
+      //JR_PRINT("+");      JR_PRINTDEC(arduino.a.digital+arduino.a.analog);
+  } else {
+      int i=int(arduino.a.digital+arduino.a.analog);
+      ClearBit(Stan,i); 
+      //JR_PRINT("-");
+  }
+                      
 }
 
 
@@ -741,11 +772,29 @@ void requestEvent() {
     //not tested  !!!!
     JR_PRINTF(" get_Apin");
     JR_VDF(analog_info);
-    JR_PRINTDECV(F(" threshold"),analogPin[analog_info].a.threshold);
-    if (analog_info<arduino.a.analog) {
-      Wire.write(int(analogRead(A0+analogPin[analog_info].a.port)));
-      Wire.write(int(analogPin[analog_info].a.threshold));
-    } 
+    {
+     int res=-1;
+     int tre=-1;
+    
+   
+     if (analog_info>=A0) {
+        res=analogRead(analog_info);
+        #ifndef ARDUINO_MEGA 
+          for (int i=0;i<arduino.a.analog;i++) {
+            if (analogPin[i].a.port==(analog_info-A0)) tre=analogPin[i].a.threshold;
+          };
+        #endif  
+     } else {
+      JR_PRINTDECV(F(" threshold"),analogPin[analog_info].a.threshold);
+      if (analog_info<arduino.a.analog) {
+        res=analogRead(A0+analogPin[analog_info].a.port);
+        tre=analogPin[analog_info].a.threshold;
+      }
+     } 
+     wire_writeword(res);
+     wire_writeword(tre);
+    }
+  
   // return 2bytes Analog value of the PIN + 2 bytes of threshold
     break;
 
@@ -767,10 +816,10 @@ boolean wait_bytes(byte ile,int _ts) {
 
   while (Wire.available()<ile) {
           Dcc.process();
-      //    if (_init+_ts>millis()) {
-      //      JR_LN;JR_PRINTF("!!! wait_bytes fails: ");JR_V(_init);JR_V(_ts);JR_PRINT(millis());JR_LN;
-      //      return false;
-      //    }
+          if (_init+_ts>millis()) {
+            JR_LN;JR_PRINTF("!!! wait_bytes fails: ");JR_V(_init);JR_V(_ts);JR_PRINT(millis());JR_LN;
+            return false;
+          }
         }
   return true;
 }
@@ -797,9 +846,12 @@ void receiveEvent(int howMany) {
   
   switch (ardState(command)) {
     case initial:
+//      jr_soft_reset();
       pin_initialize(); 
+      sprintf_P(msg_toMaster_bufor,PSTR("DEL %u"),arduino.a.i2c);
       break;
     case reset_pin_info:
+      msg_toMaster_bufor[0]=0;
       pin_send=0;
       JR_VF(pin_send);
       break;
@@ -815,12 +867,12 @@ void receiveEvent(int howMany) {
         wait_bytes (3);
                 
         unsigned short port=Wire.read(); 
-        unsigned int tr=Wire.read();
+        int wire_readword(tre);
         JR_VF(port);
-        JR_VF(tr);
+        JR_VF(tre);
         
         if (port<arduino.a.analog) {
-          analogPin[port].a.threshold=tr & (B00000011 * 256 + B11111111); // 10 bits value
+          analogPin[port].a.threshold=tre & (B00000011 * 256 + B11111111); // 10 bits value
           JR_PRINTDECV(F(" set"),analogPin[port].a.threshold);
         }
       }
@@ -835,9 +887,16 @@ void receiveEvent(int howMany) {
         JR_VF(spi);
         JR_VF(port);
         JR_VF(val);
-        if (port<arduino.a.digital) {
-          setDPort (digitalPin[port].a.spi,digitalPin[port].a.port,val);
-          JR_PRINTDECV(F(" set"),getDPort(digitalPin[port].a.spi,digitalPin[port].a.port));
+        if (spi<4) {
+                             //"normal" ports
+            setDPort (spi,port,val);
+            JR_PRINTDECV(F(" HW Pin set"),getDPort(spi,port));
+        } else {            
+                            //ports from digital array  --> SPI will be ommited
+          if (port<arduino.a.digital) {
+            setDPort (digitalPin[port].a.spi,digitalPin[port].a.port,val);
+            JR_PRINTDECV(F(" digitalPin set"),getDPort(digitalPin[port].a.spi,digitalPin[port].a.port));
+          }
         }
       }
       break;
