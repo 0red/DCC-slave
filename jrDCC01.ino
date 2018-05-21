@@ -1,6 +1,3 @@
-#define DEBUG
-
-#include <jr.h>
 #include <SPI.h>
 #include <Wire.h>
 #include <NmraDcc.h>
@@ -9,10 +6,14 @@
 
 // -------------------------------------- DEFINE ------------------------------
 
+#define dDEBUG 1
+#define JR_DCC_BOARD
+#define TLC5940_BOARDS 2
+#define TIMER_PORTFAST1 50
 
-#define I2C_TIMEOUT 500UL
+#define I2C_TIMEOUT 200UL
 //#define ARDUINO_MEGA 1
-//#define SPI_8
+#define SPI_8
 //#define SPI_16
 #define DCC_PIN 2
 #define DCC_IRQ 0
@@ -27,9 +28,12 @@
 
 
 // SPI number CS pin SPI 1 always will be 01 (1) , SPI 2 10 (2), SPI 2 11 (3)
-//#define SPI_1_8 10
-//#define SPI_2_8 10
-//#define SPI_3_8 10
+#define SPI_8_0   7
+#define SPI_8_1   7
+  #ifdef JR_DCC_BOARD
+  #define SPI_8_2   7
+  #define SPI_8_3   7
+  #endif
 #endif
 
 #ifdef SPI_16
@@ -38,13 +42,21 @@
 #include <mcp23s17.h>
 //https://github.com/sumotoy/gpio_expander
 
-#define SPI_1_16 1
-#define SPI_2_16 2
-#define SPI_3_16 3
+//#define SPI_1_16 1
+//#define SPI_2_16 2
+//#define SPI_3_16 3
 //#include <MCP23S17.h>  
 //https://github.com/n0mjs710/MCP23S17 
 //http://playground.arduino.cc/Main/MCP23S17
 #endif
+
+#ifdef TLC5940_BOARDS
+ #include "Tlc5940.h"
+ #include <jr_tlc5940.h>
+ #include "jr_cd4051.h"
+ 
+#endif
+
 
 #include <jr.h>
 #include <jrDCC.h>
@@ -93,7 +105,7 @@ byte PIN[4][22]={
 
 // -------------------------------------- VARIABLES ------------------------------
 
-byte Stan[get_byte( (1<<ANALOG_MAX) + (1<<DIGITAL_MAX) + 1)];
+byte Stan[get_byte( (1<<ANALOG_MAX) + (1<<DIGITAL_MAX) +(1<<(LED_MAX*SIGNAL_TYPE_LEN)) + 1)];
 byte pin_send=0;
 byte analog_info=0;
 NmraDcc  Dcc ;
@@ -115,17 +127,31 @@ char msg_toMaster_bufor [CMD_BUF+1];
  mcp23s17 spi3(10,0x23);
 #endif
 
-#ifdef SPI_1_8
- JRmcp23s08 spi4(SPI_1_8,0,1);
+
+#ifdef SPI_8
+ JRmcp23s08 spi8_x(10,0,0);
 #endif
 
-#ifdef SPI_2_8
- JRmcp23s08 spi5(SPI_2_8,1,0);
+#ifdef SPI_8_0
+ JRmcp23s08 spi8_0(SPI_8_0,0,0);
 #endif
 
-#ifdef SPI_3_8
- JRmcp23s08 spi6(SPI_3_8,1,1);
+#ifdef SPI_8_1
+ JRmcp23s08 spi8_1(SPI_8_1,0,1);
 #endif
+
+#ifdef SPI_8_2
+ JRmcp23s08 spi8_2(SPI_8_2,1,0);
+#endif
+
+#ifdef SPI_8_3
+ JRmcp23s08 spi8_3(SPI_8_3,1,1);
+#endif
+
+#ifdef TLC5940_BOARDS
+ JRtlc5940 jrtlc(3,0);
+#endif
+
 
 // -------------------------------------- Board Specific data ------------------------------
 
@@ -136,20 +162,25 @@ ArduinoU arduino={
 };
 
 DigitalPinU digitalPin[]={
-  {"PinD1",0,3,0,0,300,power},
-  {"PinD2",0,4,1,1,0,no_dcc},
-  {"PinD3",0,5,0,0,301,sig2},
-  {"PinD4",0,7,0,0,303,power},
-  {"PinD5",0,8,1,1,0,no_dcc},
-  {"PinD6",0,13,0,0,304,sig2}
+  {"PinD1",100,1,3,0,0,300,power},
+  {"PinD2",101,1,4,1,1,0,no_dcc},
+  {"PinD3",102,1,5,0,0,301,sig2},
+  {"PinD4",103,1,7,0,0,303,power},
+  {"PinD5",104,1,8,1,1,0,no_dcc},
+  {"PinD6",105,1,13,0,0,304,sig2}
 };
 
 AnalogPinU analogPin[]={
-//  {"PinA1",short(0),uint8_t(600)},
-  {"PinA2",short(1),uint8_t(602)},
-  {"PinA3",short(2),uint8_t(603)}
+//  {"PinA1",50,short(0),uint8_t(600)},
+  {"PinA2",51,short(1),uint8_t(602)},
+  {"PinA3",52,short(2),uint8_t(603)}
 };
 
+LedPinU ledPin[]={
+    {"PinL1",20,short(0),uint8_t(700),},
+//  {"PinA2",21,short(1),uint8_t(602)7},
+//  {"PinA3",22,short(2),uint8_t(603)}
+};
 
 
 // -------------------------------------- CMD function ------------------------------
@@ -230,13 +261,13 @@ bool jr_cmd_state(ParserParam *p1){
 
   #ifdef SPI_8
   for (int i=1;i<4;i++) {
-    #ifndef SPI_1_8
+    #ifndef SPI_8_0
     if (i==1) continue;
     #endif
-    #ifndef SPI_2_8
+    #ifndef SPI_8_1
     if (i==2) continue;
     #endif
-    #ifndef SPI_3_8
+    #ifndef SPI_8_2
     if (i==3) continue;
     #endif
     JR_PRINT(i);JR_PRINT(": ");
@@ -267,16 +298,24 @@ void pin_initialize() {
 
 
   JR_PRINTLNF("pin_initialize start");
-  #ifdef SPI_1_8
-    spi4.initialize();
+  #ifdef SPI_8
+    spi8_x.initialize();  //for working only
+  #endif
+  
+  #ifdef SPI_8_0
+    spi8_0.initialize();
   #endif
 
-  #ifdef SPI_2_8
-    spi5.initialize();
+  #ifdef SPI_8_1
+    spi8_1.initialize();
   #endif
 
-  #ifdef SPI_3_8
-    spi6.initialize();
+  #ifdef SPI_8_2
+    spi8_2.initialize();
+  #endif
+
+  #ifdef SPI_8_3
+    spi8_3.initialize();
   #endif
 
   aState=initial;
@@ -334,20 +373,25 @@ void pin_initialize() {
 
     #ifdef SPI_8
     JR_PRINTF("SPI8:");
-            #ifdef SPI_1_8
-              JR_PRINTF("1:");
-              if (digitalPin[i].a.spi==1 && digitalPin[i].a.in_port) { spi4.setIN    (digitalPin[i].a.port,true);}
-              if (digitalPin[i].a.spi==1 && digitalPin[i].a.pull_up) { spi4.setPullUp(digitalPin[i].a.port,true);}
+            #ifdef SPI_8_0
+              JR_PRINTF("8_0:");
+              if (digitalPin[i].a.spi==1 && digitalPin[i].a.in_port) { spi8_0.setIN    (digitalPin[i].a.port,true);}
+              if (digitalPin[i].a.spi==1 && digitalPin[i].a.pull_up) { spi8_0.setPullUp(digitalPin[i].a.port,true);}
             #endif          
-            #ifdef SPI_2_8
-              JR_PRINTF("2:");
-              if (digitalPin[i].a.spi==2 && digitalPin[i].a.in_port) { spi5.setIN    (digitalPin[i].a.port,true);}
-              if (digitalPin[i].a.spi==2 && digitalPin[i].a.pull_up) { spi5.setPullUp(digitalPin[i].a.port,true);}
+            #ifdef SPI_8_1
+              JR_PRINTF("8_1:");
+              if (digitalPin[i].a.spi==2 && digitalPin[i].a.in_port) { spi8_1.setIN    (digitalPin[i].a.port,true);}
+              if (digitalPin[i].a.spi==2 && digitalPin[i].a.pull_up) { spi8_1.setPullUp(digitalPin[i].a.port,true);}
             #endif          
-            #ifdef SPI_3_8
-              JR_PRINTF("3:");
-              if (digitalPin[i].a.spi==3 && digitalPin[i].a.in_port) { spi6.setIN    (digitalPin[i].a.port,true);}
-              if (digitalPin[i].a.spi==3 && digitalPin[i].a.pull_up) { spi6.setPullUp(digitalPin[i].a.port,true);}
+            #ifdef SPI_8_2
+              JR_PRINTF("8_2:");
+              if (digitalPin[i].a.spi==3 && digitalPin[i].a.in_port) { spi8_2.setIN    (digitalPin[i].a.port,true);}
+              if (digitalPin[i].a.spi==3 && digitalPin[i].a.pull_up) { spi8_2.setPullUp(digitalPin[i].a.port,true);}
+            #endif          
+			#ifdef SPI_8_3
+              JR_PRINTF("8_3:");
+              if (digitalPin[i].a.spi==4 && digitalPin[i].a.in_port) { spi8_3.setIN    (digitalPin[i].a.port,true);}
+              if (digitalPin[i].a.spi==4 && digitalPin[i].a.pull_up) { spi8_3.setPullUp(digitalPin[i].a.port,true);}
             #endif          
 
       JR_PRINTLNF("SPI8: end");
@@ -410,16 +454,20 @@ boolean setDPort(short spi,short port,short val) {
     if (spi==3 && port>=0 && port<16) { spi3.gpioDigitalWrite(port,((val==LOW) ? false : true )); }
   #endif
 
-  #ifdef SPI_1_8
-    if (spi==1 && port>=0 && port<8) { spi4.pinWrite(port,((val==LOW) ? false : true )); }
+  #ifdef SPI_8_0
+    if (spi==1 && port>=0 && port<8) { spi8_0.pinWrite(port,((val==LOW) ? false : true )); }
   #endif
         
-  #ifdef SPI_2_8
-    if (spi==2 && port>=0 && port<8) { spi5.pinWrite(port,((val==LOW) ? false : true )); }
+  #ifdef SPI_8_1
+    if (spi==2 && port>=0 && port<8) { spi8_1.pinWrite(port,((val==LOW) ? false : true )); }
   #endif
 
-  #ifdef SPI_3_8
-    if (spi==3 && port>=0 && port<8) { spi6.pinWrite(port,((val==LOW) ? false : true )); }
+  #ifdef SPI_8_2
+    if (spi==3 && port>=0 && port<8) { spi8_2.pinWrite(port,((val==LOW) ? false : true )); }
+  #endif
+
+  #ifdef SPI_8_3
+    if (spi==4 && port>=0 && port<8) { spi8_3.pinWrite(port,((val==LOW) ? false : true )); }
   #endif
   
 }
@@ -437,8 +485,8 @@ SPIports16 spiPorts16;
 
 #ifdef SPI_8 
 union SPIports8 {
-  uint8_t spi[3];
-  byte b[3];
+  uint8_t spi[5];
+  byte b[4];
 };
 SPIports8 spiPorts8;
 #endif
@@ -467,19 +515,24 @@ void getDPortFast_Update() {
   #endif
  
   #ifdef SPI_8
-    for (byte i=0;i<3;i++) spiPorts8.b[i]=0;
-    #ifdef SPI_1_8
-      spiPorts8.spi[0]=spi4.getR(9);  //get GPIO A ports
-//      JR_PRINTBINV(F("1A"),spiPorts8.b[0]);
+    for (byte i=0;i<4;i++) spiPorts8.b[i]=0;
+    #ifdef SPI_8_0
+      spiPorts8.spi[0]=spi8_0.getR(9);  //get GPIO A ports
+      JR_PRINTBINV(F("1A"),spiPorts8.b[0]);
     #endif
-    #ifdef SPI_2_8 
-      spiPorts8.spi[1]=spi5.getR(9);  //get GPIO A ports
+    #ifdef SPI_8_1 
+      spiPorts8.spi[1]=spi8_1.getR(9);  //get GPIO A ports
       JR_PRINTBINV(F("2A"),spiPorts8.b[1]);
     #endif
-    #ifdef SPI_3_8 
-      spiPorts8.spi[2]=spi6.getR(9);  //get GPIO A ports
+    #ifdef SPI_8_2 
+      spiPorts8.spi[2]=spi8_2.getR(9);  //get GPIO A ports
       JR_PRINTBINV(F("3A"),spiPorts8.b[2]);
     #endif
+    #ifdef SPI_8_3
+      spiPorts8.spi[3]=spi8_3.getR(9);  //get GPIO A ports
+      JR_PRINTBINV(F("3A"),spiPorts8.b[3]);
+    #endif
+
     //JR_LN;  
   #endif
     
@@ -488,32 +541,35 @@ void getDPortFast_Update() {
 short getDPortFast (short spi,short port) {
   //return LOW_HIGH
   if (spi==0) return getDPort(0,port);
-  if (spi<4) {
   #ifdef SPI_16  
+  if (spi<4) {
     return (TestBit(spiPorts16.b,(spi-1)*16+(port+1))?LOW:HIGH);
+	}
   #endif
   #ifdef SPI_8
+  if (spi<5) {
     return (TestBit(spiPorts8.b,(spi-1)*8+(port+1))?LOW:HIGH);
+	}
   #endif
-  }
+
 }
 
 bool jr_cmd_rr(ParserParam *p1){
-  JR_PRINTLNF("Read address spi4");   
+  JR_PRINTLNF("Read address spi8_0");   
   ParserParam p=*p1;
-  #ifdef SPI_1_8
-    byte b=spi4.getR(p.i[1]);
+  #ifdef SPI_8_0
+    byte b=spi8_0.getR(p.i[1]);
     JR_PRINTBINV(p.i[1], b   );
   #endif
 };
 
 bool jr_cmd_wr(ParserParam *p1){
-  JR_PRINTLNF("Write address spi4"); 
+  JR_PRINTLNF("Write address spi8_0"); 
   ParserParam p=*p1;
-  #ifdef SPI_1_8
-  spi4.setR(p.i[1],p.i[2]);
+  #ifdef SPI_8_0
+  spi8_0.setR(p.i[1],p.i[2]);
     JR_PRINTDECV(F("reg"),p.i[1]);
-    JR_PRINTBINV(F("v")),p.i[2]);
+    JR_PRINTBINV(F("v"),p.i[2]);
   #endif
   
 };
@@ -544,27 +600,36 @@ short getDPort(short spi,short port) {
     if (spi==3 && port>=0 && port<16) { return((spi3.gpioDigitalRead(port)>0) ? HIGH : LOW ); }
   #endif
   
-  #ifdef SPI_1_8
-    JR_PRINTLNF("ala");
-    JR_PRINTLN(spi4.pinRead(port));
-    if (spi==1 && port>=0 && port<8) { return((spi4.pinRead(port)>0) ? HIGH : LOW ); }
+  #ifdef SPI_8_0
+    //JR_PRINTLNF("ala");
+    //JR_PRINTLN(spi8_0.pinRead(port));
+    if (spi==1 && port>=0 && port<8) { return((spi8_0.pinRead(port)>0) ? HIGH : LOW ); }
   #endif
 
-  #ifdef SPI_2_8
-    if (spi==2 && port>=0 && port<8) { return((spi5.pinRead(port)>0) ? HIGH : LOW ); }
+  #ifdef SPI_8_1
+    if (spi==2 && port>=0 && port<8) { return((spi8_1.pinRead(port)>0) ? HIGH : LOW ); }
   #endif
 
-  #ifdef SPI_3_8
-    if (spi==3 && port>=0 && port<8) { return((spi6.pinRead(port)>0) ? HIGH : LOW ); }
+  #ifdef SPI_8_2
+    if (spi==3 && port>=0 && port<8) { return((spi8_2.pinRead(port)>0) ? HIGH : LOW ); }
+  #endif
+
+  #ifdef SPI_8_3
+    if (spi==4 && port>=0 && port<8) { return((spi8_3.pinRead(port)>0) ? HIGH : LOW ); }
   #endif
   
   return 1;
 }
+
+
+unsigned long timer_portfast;
+
 // -------------------------------------- setup ------------------------------
 
 void setup() {
   wdt_disable();
   Serial.begin(115200);           // start serial for output
+  delay(10);
   JR_PRINTLNF("Setup START");
 
   msg_received_bufor[0]=0;
@@ -577,7 +642,8 @@ void setup() {
   // pin initialization
   arduino.a.digital=short(sizeof (digitalPin)/ sizeof (DigitalPinU)),
   arduino.a.analog =short(sizeof (analogPin) / sizeof (AnalogPinU) ),
-  arduino.a.bytes  =get_byte(arduino.a.analog+arduino.a.digital+1);
+  arduino.a.led =short(sizeof (ledPin) / sizeof (LedPinU) ),
+  arduino.a.bytes  =get_byte(arduino.a.analog+arduino.a.digital+1+arduino.a.led*SIGNAL_TYPE_LEN);
   // +1 for bit informing for pending message to MASTER 
   
   aState=initial;
@@ -611,6 +677,17 @@ void setup() {
   jrcmd.add(F("RR")     ,&jr_cmd_rr);
   jrcmd.add(F("MA")     ,&jr_cmd_master_msg);
   jrcmd.add(F("STAN")   ,&jr_cmd_stan);
+  jrcmd.add(F("AALL"),  &JRcd4051_cmdAll);
+  jrcmd.add(F("AGET"),  &JRcd4051_getA);
+  jrcmd.add(F("ATRE"),  &JRcd4051_setTreshhold);
+
+  jrcmd.add(F("LED"),   &JRtlc5940_cmdShow);
+  jrcmd.add(F("LEDON"), &JRtlc5940_cmdLed);
+  jrcmd.add(F("LEDSET"),&JRtlc5940_cmdLedVal);
+  jrcmd.add(F("DEMO"),  &JRtlc5940_cmdDemo);
+
+  jrtlc.init();
+  timer_portfast=millis();
   
   JR_PRINTLNF("Setup END");
 
@@ -618,7 +695,18 @@ void setup() {
 
 // -------------------------------------- loop ------------------------------
 
+
+
+
 void loop() {
+ 
+
+#ifdef TLC5940_BOARDS
+  //jrtlc.demo_loop(1000);
+  jrtlc.led_loop();
+#endif
+  
+
   byte i;
   // put your main code here, to run repeatedly:
 //    Serial.println("Loop");
@@ -636,8 +724,15 @@ void loop() {
   
   Dcc.process();
 
+//return;
+
   // prepare the state of the pins  
-  getDPortFast_Update();
+
+ if (millis()>timer_portfast+TIMER_PORTFAST1) {
+      getDPortFast_Update();
+      timer_portfast=millis();
+    
+  
   for (i=0;i<arduino.a.digital;i++) {
     // Reed (kontaktron) & analog optical proximity sensors show LOW in case of USE 
     // therefore 0 (HIGH) state is normally set after the data get by I2C
@@ -662,7 +757,12 @@ void loop() {
       SetBit(Stan,j);
     }  
   #endif
-    
+    for (i=0;i<arduino.a.led;i++) {  
+      int j=int(arduino.a.digital+arduino.a.analog+1+i*SIGNAL_TYPE_LEN);
+      for (byte i1=0;i1<SIGNAL_TYPE_LEN;i1++) {
+        
+      }
+    }
   }
 
   // add info if any message pending
@@ -675,7 +775,9 @@ void loop() {
       ClearBit(Stan,i); 
       //JR_PRINT("-");
   }
-                      
+
+
+ }
 }
 
 
@@ -739,7 +841,18 @@ void requestEvent() {
           Wire.write(analogPin[pin_send-arduino.a.digital].b,sizeof(AnalogPinU));
           JR_PRINTDECV(F(" size"),sizeof(AnalogPinU));
           pin_send++;  
-        } 
+        } else {
+      //if all Digital send --> propagate analogPin
+      
+          if (pin_send<arduino.a.digital+arduino.a.analog+arduino.a.led) {
+            //send analog PIN
+            JR_PRINTF(" L");
+            JR_PRINTDECV(F(" pin"),ledPin[pin_send-arduino.a.digital-arduino.a.analog].a.port);
+            Wire.write(ledPin[pin_send-arduino.a.digital-arduino.a.analog].b,sizeof(LedPinU));
+            JR_PRINTDECV(F(" size"),sizeof(LedPinU));
+            pin_send++;  
+          }   
+        }
       }
       
     break;
