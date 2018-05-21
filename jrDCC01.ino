@@ -113,7 +113,7 @@ ardState aState=initial;
 JRcmd jrcmd;
 char msg_received_bufor [CMD_BUF+1];
 char msg_toMaster_bufor [CMD_BUF+1];
-
+byte blocking [bl_end*BLOCKMSG_NR_BITS*8];
 
 #ifdef SPI_1_16
  mcp23s17 spi1(10,0x21);
@@ -653,6 +653,8 @@ void setup() {
   // I2C initialization
   JR_PRINTLNF("I2C Wire Library START");
   Wire.begin(int(arduino.a.i2c));                // join i2c bus with address #8
+  TWAR = ((int(arduino.a.i2c)) << 1) | 1;  // enable broadcasts to be received
+
   Wire.onRequest(requestEvent); // register event
   Wire.onReceive(receiveEvent); // register event
   JR_PRINTDECV (F("I2C number"),byte(arduino.a.i2c));
@@ -1026,6 +1028,17 @@ void receiveEvent(int howMany) {
         }
         msg_received_bufor[ile]=0;msg_received_bufor[CMD_BUF]=0; // for security
         JR_VF(ile);JR_PRINT(msg_received_bufor);
+      }
+      break;
+    case block_msg:
+      JR_PRINTF(" block msg ");
+      wait_bytes (sizeof(BlockMsg));
+      {
+        BlockMsgU msg;  
+        for (int i=0;i<sizeof(BlockMsg);i++) msg.b[i]=Wire.read();
+        JR_PRINTDECV(F(" block?"),msg.a.block);
+        JR_PRINTDECV(F(" typ"),msg.a.typ);
+        JR_PRINTDECV(F(" nr"),msg.a.nr);
       }
       break;
     default:
