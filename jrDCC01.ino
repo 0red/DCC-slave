@@ -6,7 +6,7 @@
 
 // -------------------------------------- DEFINE ------------------------------
 
-#define dDEBUG 1
+#define DEBUG 1
 #define JR_DCC_BOARD
 #define TLC5940_BOARDS 2
 #define TIMER_PORTFAST1 50
@@ -105,7 +105,7 @@ byte PIN[4][22]={
 
 // -------------------------------------- VARIABLES ------------------------------
 
-byte Stan[get_byte( (1<<ANALOG_MAX) + (1<<DIGITAL_MAX) +(1<<(LED_MAX*SIGNAL_TYPE_LEN)) + 1)];
+byte Stan[get_byte( (1<<ANALOG_MAX) + (1<<DIGITAL_MAX) + ((1<<LED_MAX)*SIGNAL_TYPE_LEN) + 1)];
 byte pin_send=0;
 byte analog_info=0;
 NmraDcc  Dcc ;
@@ -161,7 +161,7 @@ ArduinoU arduino={
    short(73), //i2c   
 };
 
-DigitalPinU digitalPin[]={
+DigitalPinU digitalPin[]={//name,nr,spi,port,pull_up,in_port,dcc,dcc_type
   {"PinD1",100,1,3,0,0,300,power},
   {"PinD2",101,1,4,1,1,0,no_dcc},
   {"PinD3",102,1,5,0,0,301,sig2},
@@ -170,16 +170,122 @@ DigitalPinU digitalPin[]={
   {"PinD6",105,1,13,0,0,304,sig2}
 };
 
-AnalogPinU analogPin[]={
-//  {"PinA1",50,short(0),uint8_t(600)},
-  {"PinA2",51,short(1),uint8_t(602)},
-  {"PinA3",52,short(2),uint8_t(603)}
+AnalogPinU analogPin[]={   //name,nr,port,tresh,typ
+//  {"PinA1",50,short(0),uint8_t(600),proximity},
+  {"PinA2",51,short(1),uint8_t(602),proximity},
+  {"PinA3",52,short(2),uint8_t(603),proximity}
 };
 
 LedPinU ledPin[]={
-    {"PinL1",20,short(0),uint8_t(700),},
-//  {"PinA2",21,short(1),uint8_t(602)7},
+    {"PinL1",2,short(16),uint8_t(700),sem3},
+    {"PinA2",21,short(1),uint8_t(702),sem3}
 //  {"PinA3",22,short(2),uint8_t(603)}
+};
+
+byte ledPinVal[sizeof(ledPin)];
+
+int _setSignal(int i) {
+  if (i>=(sizeof(ledPin))/sizeof(LedPinU)) return -1;
+  int port=ledPin[i].a.port;
+  int i2=arduino.a.analog+arduino.a.digital+1;
+  short kolor=0;
+  for (int i1=0; i1<SIGNAL_TYPE_LEN;i1++) 
+        if (GetBit(Stan,i2+i1+i*SIGNAL_TYPE_LEN)) SetBite(kolor,i1);
+        
+  JR_PRINTDECV("_setSignal i",i);
+  JR_PRINTDECV(" port",port);
+  
+  switch (ledPin[i].a.signal_type) {
+    case sem4:
+        switch (kolor) {
+            case yellow:
+            case green:
+            case white:
+            case red:
+            default:
+              break;
+        };
+        
+      break;
+    case sem3:
+    case lin3:
+        switch (kolor) {
+            
+            case yellow:          
+              jrtlc.led_on(port+0,1);
+              jrtlc.led_on(port+1,0);
+              jrtlc.led_on(port+2,0);
+
+              break;
+            case green:
+            case white:
+              jrtlc.led_on(port+0,0);
+              jrtlc.led_on(port+1,0);
+              jrtlc.led_on(port+2,1);
+              break;
+            case red:
+            default:
+              jrtlc.led_on(port+0,0);
+              jrtlc.led_on(port+1,1);
+              jrtlc.led_on(port+2,0);
+              break;
+        };
+        
+      break;
+    case man2:
+        switch (kolor) {
+
+            case yellow:
+            case green:
+            case white:
+              jrtlc.led_on(port+0,1);
+              jrtlc.led_on(port+1,0);
+              break;
+            case red:         
+            default:
+              jrtlc.led_on(port+0,0);
+              jrtlc.led_on(port+1,1);
+              break;
+        }
+      break;
+  }
+  jrtlc.led_loop();
+}
+
+void initSignals() {
+  for (int i=0;i<(sizeof(ledPin))/sizeof(LedPinU);i++) _setSignal(i);
+}
+
+void setSignal(int _id,short kolor) {
+  for (int i=0;i<(sizeof(ledPin))/sizeof(LedPinU);i++) {
+    
+   JR_PRINTLNF("setSignal"); Serial.print (i);
+  JR_PRINTDECV("i",i);
+  JR_PRINTDECV(" nr",ledPin[i].a.nr);
+  JR_PRINTDECV(" port",ledPin[i].a.port);
+  JR_LN;
+  
+  if (ledPin[i].a.nr==_id) {
+      JR_PRINTLNF("setSignal"); 
+      int i2=arduino.a.analog+arduino.a.digital+1;
+      for (int i1=0; i1<SIGNAL_TYPE_LEN;i1++) 
+        if (GetBite(kolor,i1)) { SetBit(Stan,i2+i1+i*SIGNAL_TYPE_LEN); } else {ClearBit(Stan,i2+i1+i*SIGNAL_TYPE_LEN); }
+      //ledPinVal[i]=kolor;
+      _setSignal(i);
+    }
+  }
+}
+
+
+bool jr_cmd_signal(ParserParam *p1){
+//  Serial.print("dupa2");
+  JR_PRINTLNF("jr_cmd_signal"); 
+  ParserParam p=*p1;
+  setSignal(p.i[1],p.i[2]);
+  JR_PRINTV("sig_id",p.i[1]);
+  JR_PRINTV("kolor",p.i[2]);
+  JR_LN;
+  
 };
 
 
@@ -427,6 +533,7 @@ void pin_initialize() {
 }
 
 
+
 // -------------------------------------- setDPort ------------------------------
 
 boolean setDPort(short spi,short port,short val) {
@@ -518,19 +625,23 @@ void getDPortFast_Update() {
     for (byte i=0;i<4;i++) spiPorts8.b[i]=0;
     #ifdef SPI_8_0
       spiPorts8.spi[0]=spi8_0.getR(9);  //get GPIO A ports
-      JR_PRINTBINV(F("1A"),spiPorts8.b[0]);
+//      JR_PRINTBINV(F("1A"),spiPorts8.b[0]);
+      _critical();
     #endif
     #ifdef SPI_8_1 
       spiPorts8.spi[1]=spi8_1.getR(9);  //get GPIO A ports
-      JR_PRINTBINV(F("2A"),spiPorts8.b[1]);
+//      JR_PRINTBINV(F("2A"),spiPorts8.b[1]);
+      _critical();
     #endif
     #ifdef SPI_8_2 
       spiPorts8.spi[2]=spi8_2.getR(9);  //get GPIO A ports
-      JR_PRINTBINV(F("3A"),spiPorts8.b[2]);
+//      JR_PRINTBINV(F("3A"),spiPorts8.b[2]);
+      _critical();
     #endif
     #ifdef SPI_8_3
       spiPorts8.spi[3]=spi8_3.getR(9);  //get GPIO A ports
-      JR_PRINTBINV(F("3A"),spiPorts8.b[3]);
+//      JR_PRINTBINV(F("3A"),spiPorts8.b[3]);
+      _critical();
     #endif
 
     //JR_LN;  
@@ -679,35 +790,36 @@ void setup() {
   jrcmd.add(F("RR")     ,&jr_cmd_rr);
   jrcmd.add(F("MA")     ,&jr_cmd_master_msg);
   jrcmd.add(F("STAN")   ,&jr_cmd_stan);
-  jrcmd.add(F("AALL"),  &JRcd4051_cmdAll);
-  jrcmd.add(F("AGET"),  &JRcd4051_getA);
-  jrcmd.add(F("ATRE"),  &JRcd4051_setTreshhold);
+  jrcmd.add(F("AALL")   ,&JRcd4051_cmdAll);
+  jrcmd.add(F("AGET")   ,&JRcd4051_getA);
+  jrcmd.add(F("ATRE")   ,&JRcd4051_setTreshhold);
 
-  jrcmd.add(F("LED"),   &JRtlc5940_cmdShow);
-  jrcmd.add(F("LEDON"), &JRtlc5940_cmdLed);
-  jrcmd.add(F("LEDSET"),&JRtlc5940_cmdLedVal);
-  jrcmd.add(F("DEMO"),  &JRtlc5940_cmdDemo);
+  jrcmd.add(F("LED")    ,&JRtlc5940_cmdShow);
+  jrcmd.add(F("LEDON")  ,&JRtlc5940_cmdLed);
+  jrcmd.add(F("LEDSET") ,&JRtlc5940_cmdLedVal);
+  jrcmd.add(F("DEMO")   ,&JRtlc5940_cmdDemo);
+  jrcmd.add(F("SIG")    ,&jr_cmd_signal);
 
   jrtlc.init();
   timer_portfast=millis();
-  
+  initSignals();
   JR_PRINTLNF("Setup END");
-
+  
 }
 
 // -------------------------------------- loop ------------------------------
 
 
-
+void _critical() {
+    Dcc.process();
+    #ifdef TLC5940_BOARDS
+        //jrtlc.demo_loop(1000);
+      jrtlc.led_loop();
+    #endif  
+}
 
 void loop() {
- 
-
-#ifdef TLC5940_BOARDS
-  //jrtlc.demo_loop(1000);
-  jrtlc.led_loop();
-#endif
-  
+   _critical(); 
 
   byte i;
   // put your main code here, to run repeatedly:
@@ -724,8 +836,6 @@ void loop() {
   jrcmd.proceed(&Serial);
   //delay(10);
   
-  Dcc.process();
-
 //return;
 
   // prepare the state of the pins  
@@ -743,6 +853,7 @@ void loop() {
     // todo --> check the Occupancy board result and reaction --> 
     //          1 on I2C means Train is on the track 
     //          0 - possibly no train (NOW)
+    
     if (getDPortFast(digitalPin[i].a.spi,digitalPin[i].a.port)==LOW) {SetBit(Stan,i);}
   }
   for (i=0;i<arduino.a.analog;i++) {
@@ -865,10 +976,13 @@ void requestEvent() {
         Wire.write(Stan,arduino.a.bytes);
         {
           //clear state
+          for (int i=0; i<arduino.a.digital+arduino.a.analog+1;i++) ClearBit(Stan,i);
+          /*
           for (int i=0; i<sizeof(Stan);i++) {
             JR_PRINTBINV(i,Stan[i]);
             Stan[i]=0;
           }
+          */
             JR_PRINTF(" clean Stan ");
 //            while(1);
         }
@@ -926,11 +1040,12 @@ void requestEvent() {
 }
 
 
+
 boolean wait_bytes(byte ile,int _ts) {
   unsigned long  _init=millis();
 
   while (Wire.available()<ile) {
-          Dcc.process();
+          _critical(); 
           if (_init+_ts>millis()) {
             JR_LN;JR_PRINTF("!!! wait_bytes fails: ");JR_V(_init);JR_V(_ts);JR_PRINT(millis());JR_LN;
             return false;
