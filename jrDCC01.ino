@@ -819,8 +819,14 @@ void _critical() {
 }
 
 void loop() {
-   _critical(); 
 
+  /* cd4051 test ptocedure
+  JRcd4051_cmdAll(0);
+  delay (1500);
+  return;
+  */
+  
+   _critical(); 
   byte i;
   // put your main code here, to run repeatedly:
 //    Serial.println("Loop");
